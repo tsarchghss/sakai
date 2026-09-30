@@ -1,8 +1,7 @@
 {
   "name": "sakai-ui",
   "version": "1.0.0",
-  "description": "Sakai Element",
-  "main": "js/sakai-element.js",
+  "description": "Sakai User Interface elements",
   "workspaces": [
     "./packages/*"
   ],
@@ -55,6 +54,7 @@
     "@sakai-ui/sakai-search": "workspace:*",
     "@sakai-ui/sakai-sitestats": "workspace:*",
     "@sakai-ui/sakai-submission-messager": "workspace:*",
+    "@sakai-ui/sakai-tag-selector": "workspace:*",
     "@sakai-ui/sakai-tasks": "workspace:*",
     "@sakai-ui/sakai-user-photo": "workspace:*",
     "@sakai-ui/sakai-widgets": "workspace:*",

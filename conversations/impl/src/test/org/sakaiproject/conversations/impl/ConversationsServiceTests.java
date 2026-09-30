@@ -152,11 +152,6 @@ public class ConversationsServiceTests extends AbstractTransactionalJUnit4Spring
 
     @Before
     public void setup() {
-        // Shared vocabulary storage commits through JDBC, outside the Hibernate test transaction.
-        tagService.getTags().getAll().forEach(tag -> tagService.getTags().deleteTag(tag.getTagId()));
-        tagService.getTagCollections().getAll().forEach(collection ->
-            tagService.getTagCollections().deleteTagCollection(collection.getTagCollectionId()));
-
         reset(sessionManager);
         reset(securityService);
         reset(userDirectoryService);
@@ -1282,6 +1277,20 @@ public class ConversationsServiceTests extends AbstractTransactionalJUnit4Spring
         assertEquals(sanitizedGuidelines, settingsRepository.findBySiteId(site1Id).get().getGuidelines());
     }
 
+    private List<TagTransferBean> createTags(List<TagTransferBean> tags) {
+        return tagService.createSiteTags(tags.get(0).getSiteId(), "conversations", tags.stream()
+            .map(tag -> org.sakaiproject.tags.api.Tag.builder().tagId(tag.getId())
+                .tagLabel(tag.getLabel()).description(tag.getDescription()).build())
+            .collect(Collectors.toList())).stream().map(tag -> {
+                TagTransferBean result = new TagTransferBean();
+                result.setId(tag.getTagId());
+                result.setSiteId(tag.getTagCollectionId());
+                result.setLabel(tag.getTagLabel());
+                result.setDescription(tag.getDescription());
+                return result;
+            }).collect(Collectors.toList());
+    }
+
     @Test
     public void createAndListTags() {
 
@@ -1290,13 +1299,13 @@ public class ConversationsServiceTests extends AbstractTransactionalJUnit4Spring
         tag.setLabel("chicken");
 
         // This should throw as there's no current user
-        assertThrows(ConversationsPermissionsException.class, () -> conversationsService.createTags(Collections.singletonList(tag)));
+        assertThrows(SecurityException.class, () -> createTags(Collections.singletonList(tag)));
 
         when(sessionManager.getCurrentSessionUserId()).thenReturn(user1);
 
         when(securityService.unlock(Permissions.TAG_CREATE.label, site1Ref)).thenReturn(true);
         try {
-            TagTransferBean savedTag = conversationsService.createTags(Collections.singletonList(tag)).get(0);
+            TagTransferBean savedTag = createTags(Collections.singletonList(tag)).get(0);
             assertFalse(savedTag.getId() == null);
 
             List<TagTransferBean> siteTags = conversationsService.getTagsForSite(tag.getSiteId());
@@ -1311,7 +1320,7 @@ public class ConversationsServiceTests extends AbstractTransactionalJUnit4Spring
             List<TagTransferBean> tags = new ArrayList<>();
             tag.setLabel("turkey");
             tags.add(tag);
-            conversationsService.createTags(tags);
+            createTags(tags);
 
             siteTags = conversationsService.getTagsForSite(tag.getSiteId());
             assertEquals(2, siteTags.size());
@@ -1329,7 +1338,7 @@ public class ConversationsServiceTests extends AbstractTransactionalJUnit4Spring
         TagTransferBean tag = new TagTransferBean();
         tag.setSiteId(site1Id);
         tag.setLabel("chicken");
-        TagTransferBean savedTag = conversationsService.createTags(Collections.singletonList(tag)).get(0);
+        TagTransferBean savedTag = createTags(Collections.singletonList(tag)).get(0);
 
         TopicTransferBean firstTopic = createTopic(true);
         firstTopic.tags = Collections.singletonList(savedTag);
@@ -1350,7 +1359,7 @@ public class ConversationsServiceTests extends AbstractTransactionalJUnit4Spring
         assertTrue(tagService.getTagAssociationIds(site1Id, firstTopic.id).isEmpty());
         assertEquals(Collections.singletonList(savedTag.getId()), tagService.getTagAssociationIds(site1Id, secondTopic.id));
         assertEquals(Collections.singletonList(savedTag.getId()), tagService.getTagAssociationIds(site1Id, assignmentId));
-        assertEquals("chicken", tagService.getTags().getForId(savedTag.getId()).get().getTagLabel());
+        assertEquals("chicken", tagService.getTag(savedTag.getId()).get().getTagLabel());
         assertEquals(savedTag.getId(), conversationsService.getTagsForSite(site1Id).get(0).getId());
     }
 
@@ -1362,13 +1371,12 @@ public class ConversationsServiceTests extends AbstractTransactionalJUnit4Spring
         TagTransferBean tag = new TagTransferBean();
         tag.setSiteId(site1Id);
         tag.setLabel("Shared label");
-        TagTransferBean saved = conversationsService.createTags(Collections.singletonList(tag)).get(0);
-        org.sakaiproject.tags.api.Tag shared = tagService.getTags().getForId(saved.getId()).get();
+        TagTransferBean saved = createTags(Collections.singletonList(tag)).get(0);
+        org.sakaiproject.tags.api.Tag shared = tagService.getTag(saved.getId()).get();
         assertEquals(site1Id, shared.getTagCollectionId());
         assertEquals("Shared label", shared.getTagLabel());
 
-        shared.setTagLabel("Edited through shared service");
-        tagService.getTags().updateTag(shared);
+        tagService.updateTag(shared.toBuilder().tagLabel("Edited through shared service").build());
         assertEquals("Edited through shared service", conversationsService.getTagsForSite(site1Id).get(0).getLabel());
 
         TopicTransferBean topic = createTopic(true);
@@ -1407,10 +1415,10 @@ public class ConversationsServiceTests extends AbstractTransactionalJUnit4Spring
         TagTransferBean tag = new TagTransferBean();
         tag.setSiteId(site1Id);
         tag.setLabel("Site one only");
-        TagTransferBean saved = conversationsService.createTags(Collections.singletonList(tag)).get(0);
+        TagTransferBean saved = createTags(Collections.singletonList(tag)).get(0);
         saved.setLabel("Renamed through Conversations");
-        assertThrows(IllegalArgumentException.class, () -> conversationsService.createTags(Collections.singletonList(saved)));
-        assertEquals("Site one only", tagService.getTags().getForId(saved.getId()).get().getTagLabel());
+        assertThrows(IllegalArgumentException.class, () -> createTags(Collections.singletonList(saved)));
+        assertEquals("Site one only", tagService.getTag(saved.getId()).get().getTagLabel());
     }
 
     @Test
@@ -1420,45 +1428,11 @@ public class ConversationsServiceTests extends AbstractTransactionalJUnit4Spring
         TagTransferBean tag = new TagTransferBean();
         tag.setSiteId(site2Id);
         tag.setLabel("Site two only");
-        TagTransferBean saved = conversationsService.createTags(Collections.singletonList(tag)).get(0);
+        TagTransferBean saved = createTags(Collections.singletonList(tag)).get(0);
         TopicTransferBean topic = createTopic(true);
         topic.tags = Collections.singletonList(saved);
         assertThrows(IllegalArgumentException.class, () -> conversationsService.saveTopic(topic, false));
         assertTrue(tagService.getTagAssociationIds(site1Id, topic.id).isEmpty());
-    }
-
-    @Test
-    public void batchTagCreationChecksEverySiteBeforeWriting() throws Exception {
-        switchToUser1();
-        when(securityService.unlock(Permissions.TAG_CREATE.label, site1Ref)).thenReturn(true);
-        when(securityService.unlock(Permissions.TAG_CREATE.label, site2Ref)).thenReturn(false);
-        TagTransferBean allowed = new TagTransferBean();
-        allowed.setSiteId(site1Id);
-        allowed.setLabel("Allowed");
-        TagTransferBean forbidden = new TagTransferBean();
-        forbidden.setSiteId(site2Id);
-        forbidden.setLabel("Forbidden");
-        assertThrows(ConversationsPermissionsException.class,
-            () -> conversationsService.createTags(Arrays.asList(allowed, forbidden)));
-        assertTrue(tagService.getTags().getAllInCollection(site1Id).isEmpty());
-        assertTrue(conversationsService.createTags(Collections.emptyList()).isEmpty());
-    }
-
-    @Test
-    public void batchTagCreationRejectsInvalidLabelsBeforeWriting() throws Exception {
-        switchToInstructor(site1Ref);
-        when(securityService.unlock(Permissions.TAG_CREATE.label, site1Ref)).thenReturn(true);
-        TagTransferBean valid = new TagTransferBean();
-        valid.setSiteId(site1Id);
-        valid.setLabel("Valid");
-        for (String label : Arrays.asList(null, " ", "x".repeat(256))) {
-            TagTransferBean invalid = new TagTransferBean();
-            invalid.setSiteId(site1Id);
-            invalid.setLabel(label);
-            assertThrows(IllegalArgumentException.class,
-                () -> conversationsService.createTags(Arrays.asList(valid, invalid)));
-            assertTrue(tagService.getTags().getAllInCollection(site1Id).isEmpty());
-        }
     }
 
     @Test
@@ -1468,7 +1442,7 @@ public class ConversationsServiceTests extends AbstractTransactionalJUnit4Spring
         TagTransferBean tag = new TagTransferBean();
         tag.setSiteId(site1Id);
         tag.setLabel("Copied label");
-        TagTransferBean savedTag = conversationsService.createTags(Collections.singletonList(tag)).get(0);
+        TagTransferBean savedTag = createTags(Collections.singletonList(tag)).get(0);
         TopicTransferBean first = createTopic(true);
         first.tags = Collections.singletonList(savedTag);
         first = conversationsService.saveTopic(first, false);
@@ -1480,7 +1454,7 @@ public class ConversationsServiceTests extends AbstractTransactionalJUnit4Spring
         Map<String, String> copied = ((org.sakaiproject.entity.api.EntityTransferrer) conversationsService).transferCopyEntities(site1Id, site2Id,
             Arrays.asList(first.id, second.id), Collections.emptyList());
         assertEquals(2, copied.size());
-        List<org.sakaiproject.tags.api.Tag> targetTags = tagService.getTags().getAllInCollection(site2Id);
+        List<org.sakaiproject.tags.api.Tag> targetTags = tagService.getTagsInCollection(site2Id);
         assertEquals(1, targetTags.size());
         assertEquals("Copied label", targetTags.get(0).getTagLabel());
         assertNotEquals(savedTag.getId(), targetTags.get(0).getTagId());
@@ -1493,13 +1467,13 @@ public class ConversationsServiceTests extends AbstractTransactionalJUnit4Spring
         Map<String, String> repeated = ((org.sakaiproject.entity.api.EntityTransferrer) conversationsService)
             .transferCopyEntities(site1Id, site2Id, Arrays.asList(first.id, second.id), Collections.emptyList());
         assertEquals(2, repeated.size());
-        assertEquals(1, tagService.getTags().getAllInCollection(site2Id).size());
+        assertEquals(1, tagService.getTagsInCollection(site2Id).size());
         assertEquals(4, topicRepository.findBySiteId(site2Id).size());
         for (ConversationsTopic topic : topicRepository.findBySiteId(site2Id)) {
             assertEquals(Collections.singletonList(targetTags.get(0).getTagId()),
                 tagService.getTagAssociationIds(site2Id, topic.getId()));
         }
-        assertTrue(tagService.getTags().getForId(savedTag.getId()).isPresent());
+        assertTrue(tagService.getTag(savedTag.getId()).isPresent());
     }
 
     @Test

@@ -1771,6 +1771,8 @@ public class SimplePageBean {
 	public String processResource(int type, boolean isWebSite, boolean isCaption) {
 		if (!canEditPage())
 		    return "permission-failed";
+		if (isWebSite && !securityService.unlock(SimplePage.PERMISSION_LESSONBUILDER_UPDATE, siteService.siteReference(getCurrentSiteId())))
+		    return "permission-failed";
 
 		ToolSession toolSession = sessionManager.getCurrentToolSession();
 		Long itemId = (Long)toolSession.getAttribute(LESSONBUILDER_ITEMID);
@@ -5703,7 +5705,7 @@ public class SimplePageBean {
 			    break;
 			case SimplePageItem.ASSESSMENT:
 				entity = quizEntity.getEntity(item.getSakaiId(), this);
-				if (entity == null || entity.notPublished())
+				if (entity == null || !entity.objectExists() || entity.notPublished())
 				return false;
 			    break;
 			case SimplePageItem.SCORM:
@@ -6843,6 +6845,12 @@ public class SimplePageBean {
 		// type is HTML. For weird stuff like MS Word files I use the file display code, which
 		// ShowPageProducer figures out how to display type 2 (or default) items 
 		// on the fly, so we don't have to known here what they are.
+
+		SimplePageItem replacedItem = replacefile && itemId != null && itemId != -1 ? findItem(itemId) : null;
+		boolean websiteUpload = isWebsite || (replacedItem != null && "LBWEBSITE".equals(replacedItem.getHtml()));
+		// Check before pushAdvisor(), which grants permissions on student pages.
+		if (websiteUpload && !securityService.unlock(SimplePage.PERMISSION_LESSONBUILDER_UPDATE, siteService.siteReference(getCurrentSiteId())))
+			return;
 
 		SecurityAdvisor advisor = null;
 		try {
