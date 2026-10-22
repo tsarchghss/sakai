@@ -1,0 +1,1 @@
+cmd.exe /s /c "mvn clean install sakai:deploy -Dmaven.tomcat.home=C:\Users\gjerg\source\repos\tomcat\apache-tomcat-10.1.60"
