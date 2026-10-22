@@ -16,10 +16,14 @@
 package org.sakaiproject.e2e.tests;
 
 import static com.microsoft.playwright.assertions.PlaywrightAssertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import com.microsoft.playwright.Locator;
+import com.microsoft.playwright.Page;
+import com.microsoft.playwright.Response;
 import com.microsoft.playwright.options.AriaRole;
+import com.microsoft.playwright.options.BoundingBox;
 import com.microsoft.playwright.options.SelectOption;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -45,7 +49,8 @@ class AssignmentTest extends SakaiUiTestBase {
         sakaiUrl = sakai.createCourse("instructor1", List.of(
             "sakai\\.rubrics",
             "sakai\\.assignment\\.grades",
-            "sakai\\.gradebookng"
+            "sakai\\.gradebookng",
+            "sakai\\.lessonbuildertool"
         ));
         return sakaiUrl;
     }
@@ -113,12 +118,16 @@ class AssignmentTest extends SakaiUiTestBase {
     void canAssociateRubricWithAssignment() {
         String courseUrl = ensureCourseUrl();
         String rubricAssignmentTitle = "Rubric Assignment " + System.currentTimeMillis();
+        String rubricTitle = "Draft restriction " + System.currentTimeMillis();
 
         sakai.createRubric("instructor1", courseUrl);
+        page.locator("input[title=\"Rubric Title\"]:visible").fill(rubricTitle);
         page.locator(".modal-footer button:visible, div.popover button:visible, button:visible")
             .filter(new Locator.FilterOptions().setHasText(Pattern.compile("Save", Pattern.CASE_INSENSITIVE)))
             .first()
             .click(new Locator.ClickOptions().setForce(true));
+        assertThat(page.locator("sakai-rubric .rubric-name")
+                .filter(new Locator.FilterOptions().setHasText(rubricTitle))).hasText(rubricTitle);
 
         page.navigate(courseUrl);
         sakai.toolClick("Assignments");
@@ -138,9 +147,12 @@ class AssignmentTest extends SakaiUiTestBase {
         }
 
         Locator associateRubric = page.locator("input[name=\"rbcs-associate\"][value=\"1\"]").first();
-        if (associateRubric.count() > 0) {
-            associateRubric.check(new Locator.CheckOptions().setForce(true));
-        }
+        assertThat(associateRubric).isVisible();
+        associateRubric.check();
+        Locator rubricSelector = page.locator("select[name=rbcs-rubricslist]");
+        rubricSelector.selectOption(rubricSelector.locator("option")
+                .filter(new Locator.FilterOptions().setHasText(rubricTitle)).getAttribute("value"));
+        String rubricId = rubricSelector.inputValue();
 
         fillAssignmentInstructions("<p>Rubric assignment prompt.</p>");
         submitAssignmentForm();
@@ -151,10 +163,41 @@ class AssignmentTest extends SakaiUiTestBase {
         assertThat(rubricRow).containsText(Pattern.compile("55\\.13|55", Pattern.CASE_INSENSITIVE));
 
         Locator editLink = rubricRow.locator("a").filter(new Locator.FilterOptions().setHasText(Pattern.compile("^Edit\\b", Pattern.CASE_INSENSITIVE))).first();
-        if (editLink.count() > 0) {
-            editLink.click(new Locator.ClickOptions().setForce(true));
-            assertThat(page.locator("#new_assignment_title")).hasValue(rubricAssignmentTitle);
-        }
+        editLink.click();
+        assertThat(page.locator("#new_assignment_title")).hasValue(rubricAssignmentTitle);
+        assertThat(rubricSelector).hasValue(rubricId);
+        assertThat(associateRubric).isChecked();
+        // Exit the edit form so returning to Assignments restores the list.
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Cancel").setExact(true)).click();
+        assertThat(page.locator("#assignments-list")).isVisible();
+
+        page.navigate(courseUrl);
+        sakai.toolClick("Rubrics");
+        Locator rubric = page.locator("sakai-rubric").filter(new Locator.FilterOptions().setHasText(rubricTitle));
+        Locator draftButton = rubric.locator("button.draft");
+        assertThat(draftButton).hasAttribute("aria-disabled", "true");
+        assertThat(draftButton).hasAttribute("title", "Unlink this rubric from all items before saving it as a draft.");
+
+        page.navigate(courseUrl);
+        sakai.toolClick("Assignments");
+        assertThat(page.locator("#assignments-list")).isVisible();
+        editAssignment(rubricAssignmentTitle);
+        assertThat(rubricSelector).hasValue(rubricId);
+        page.getByRole(AriaRole.RADIO, new Page.GetByRoleOptions()
+                .setName("Do not use a rubric to grade this assignment").setExact(true)).check();
+        assertThat(rubricSelector).isDisabled();
+        submitAssignmentForm();
+        assertThat(page.locator("#assignments-list")).isVisible();
+
+        page.navigate(courseUrl);
+        sakai.toolClick("Rubrics");
+        assertThat(draftButton).hasAttribute("aria-disabled", "false");
+        Response draftSave = page.waitForResponse(response -> response.url().endsWith("/rubrics/" + rubricId)
+                && response.request().method().equals("PATCH"), () -> draftButton.click());
+        assertTrue(draftSave.ok(), () -> "Rubric draft save failed: HTTP " + draftSave.status());
+        assertThat(draftButton).hasAttribute("title", "Publish Rubric");
+        page.reload();
+        assertThat(draftButton).hasAttribute("title", "Publish Rubric");
     }
 
     @Test
@@ -254,19 +297,35 @@ class AssignmentTest extends SakaiUiTestBase {
         }
 
         openReorderAssignments();
+        assertAssignmentReorderChrome();
 
-        Locator reorderItems = page.locator("#reorder-list li.sortable");
-        if (reorderItems.count() < 21) {
+        Locator reorderItems = page.locator("#reorder-list li.reorder-element.sakai-reorder-row");
+        int reorderCount = reorderItems.count();
+        if (reorderCount < 21) {
             fail("Expected the reorder list to include assignments beyond the first page.");
         }
         assertThat(page.locator("#reorder-list")).containsText(firstTitle);
         assertThat(page.locator("#reorder-list")).containsText(lastTitle);
+        assertThat(page.locator("input[id^=\"index\"]")).hasCount(0);
 
+        String originalTopTitle = reorderItems.first().locator(".sakai-reorder-title").innerText().trim();
         Locator lastAssignment = reorderItems.filter(new Locator.FilterOptions().setHasText(lastTitle)).first();
-        Locator lastAssignmentPosition = lastAssignment.locator("input[id^=\"index\"]");
-        lastAssignmentPosition.fill("1");
-        lastAssignmentPosition.dispatchEvent("change");
-        assertThat(lastAssignment.locator("select[name^=\"position_\"]")).hasValue("1");
+        boolean lastAlreadyOnTop = lastAssignment.locator("[data-action=\"move-up\"]").isDisabled();
+
+        if (!lastAlreadyOnTop) {
+            lastAssignment = moveAssignmentToTop(reorderItems, lastTitle, reorderCount);
+
+            Locator undoAll = page.locator("#undo-all");
+            assertThat(undoAll).isEnabled();
+            undoAll.click();
+            assertThat(reorderItems.first().locator(".sakai-reorder-title")).containsText(originalTopTitle);
+
+            lastAssignment = moveAssignmentToTop(reorderItems, lastTitle, reorderCount);
+        }
+
+        assertAssignmentPrecedes("#reorder-list", lastTitle, firstTitle);
+        assertThat(lastAssignment.locator("input[name^=\"position_\"]")).hasValue("1");
+        assertTrue(lastAssignment.locator("[data-action=\"move-up\"]").isDisabled());
 
         page.locator("input[name=\"save\"][value=\"Save\"], input[name=\"save\"]").first().click(new Locator.ClickOptions().setForce(true));
         page.waitForLoadState(com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED);
@@ -276,8 +335,11 @@ class AssignmentTest extends SakaiUiTestBase {
         int lastIndex = assignmentListText.indexOf(lastTitle);
         int firstIndex = assignmentListText.indexOf(firstTitle);
         if (lastIndex < 0 || firstIndex < 0 || lastIndex > firstIndex) {
-            fail("Expected reordered assignment beyond the first page to be saved before the first generated assignment.");
+            fail("Expected reordered assignments beyond the first page to keep the saved order.");
         }
+
+        openReorderAssignments();
+        assertAssignmentPrecedes("#reorder-list", lastTitle, firstTitle);
     }
 
     @Test
@@ -397,6 +459,23 @@ class AssignmentTest extends SakaiUiTestBase {
         assertThat(page.locator("#new_assignment_title")).hasValue(title);
     }
 
+    @Test
+    void externalToolPickerDisplaysItsContent() {
+        String courseUrl = ensureCourseUrl();
+        sakai.login("instructor1");
+        page.navigate(courseUrl);
+        sakai.toolClick("Assignments");
+        openAddAssignmentForm();
+
+        page.locator("#subType").selectOption(new SelectOption().setLabel("External Tool (LTI)"));
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Select External Tool (LTI)").setExact(true)).click();
+
+        // The picker must render a tool list or the no-tools message, even on a site without LTI tools.
+        assertThat(page.frameLocator("iframe[name='sakai-lti-admin-iframe']").locator(".portletBody")).isVisible();
+        assertThat(page.frameLocator("iframe[name='sakai-lti-admin-iframe']").locator(".portletBody"))
+            .not().hasText("");
+    }
+
     private void openAddAssignmentForm() {
         goToAssignmentsList();
 
@@ -424,6 +503,66 @@ class AssignmentTest extends SakaiUiTestBase {
         assertThat(titleInput).isVisible();
     }
 
+    @Test
+    @Order(12)
+    void deletedAssignmentHasNoActiveLessonsLink() {
+        String courseUrl = ensureCourseUrl();
+        String title = "Deleted lesson assignment " + System.currentTimeMillis();
+        sakai.login("instructor1");
+        page.navigate(courseUrl);
+        sakai.toolClick("Assignments");
+        createSimpleAssignment(title);
+
+        sakai.toolClick("Lessons");
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Add Content")).first().click();
+        page.locator("#addContentDiv").getByRole(AriaRole.BUTTON,
+            new Locator.GetByRoleOptions().setName("Link to an Assignment").setExact(true)).click();
+        page.getByRole(AriaRole.RADIO, new Page.GetByRoleOptions().setName(title).setExact(true)).check();
+        page.getByRole(AriaRole.BUTTON,
+            new Page.GetByRoleOptions().setName("Use selected item").setExact(true)).click();
+        Locator lessonLink = page.locator("#content").getByRole(AriaRole.LINK)
+            .filter(new Locator.FilterOptions().setHasText(title));
+        assertThat(lessonLink).isVisible();
+
+        sakai.toolClick("Assignments");
+        page.locator("tr").filter(new Locator.FilterOptions().setHasText(title))
+            .locator("td[headers=remove] input[type=checkbox]").check();
+        page.locator("#btnRemove").click();
+        page.locator("input[name=eventSubmit_doDelete_assignment]").click();
+        sakai.toolClick("Lessons");
+        assertThat(page.locator(".fake-disabled").filter(new Locator.FilterOptions().setHasText(title))).isVisible();
+        assertThat(page.locator("#content")).containsText("*Deleted*");
+        assertThat(lessonLink).hasCount(0);
+    }
+
+    @Test
+    void displaysSavedTagMarkupAsLiteralText() {
+        String courseUrl = ensureCourseUrl();
+        String title = "Literal tag " + System.currentTimeMillis();
+        String label = "<img src=x onerror=alert(1)> & \"literal\"";
+        sakai.login("instructor1");
+        page.navigate(courseUrl);
+        sakai.toolClick("Assignments");
+        openAddAssignmentForm();
+        page.locator("#new_assignment_title").fill(title);
+        Locator gradeAssignment = page.locator("#gradeAssignment").first();
+        if (gradeAssignment.count() > 0 && gradeAssignment.isChecked()) {
+            gradeAssignment.uncheck();
+        }
+        fillAssignmentInstructions("<p>Literal tag regression.</p>");
+        Locator selector = page.locator("sakai-tag-selector");
+        selector.getByRole(AriaRole.COMBOBOX).fill(label);
+        selector.getByRole(AriaRole.COMBOBOX).press("Enter");
+        submitAssignmentForm();
+        goToAssignmentsList();
+        Locator row = page.locator("tr").filter(new Locator.FilterOptions().setHasText(title));
+        assertThat(row.locator(".tag-header")).containsText(label);
+        assertThat(row.locator(".tag-header img")).hasCount(0);
+        editAssignment(title);
+        assertThat(selector.getByRole(AriaRole.BUTTON,
+            new Locator.GetByRoleOptions().setName("Deselect: " + label).setExact(true))).isVisible();
+    }
+
     private void openReorderAssignments() {
         goToAssignmentsList();
 
@@ -433,7 +572,78 @@ class AssignmentTest extends SakaiUiTestBase {
         assertThat(reorderLink).isVisible();
         reorderLink.click(new Locator.ClickOptions().setForce(true));
         page.waitForLoadState(com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED);
+        assertThat(page.locator("#assignments-reorderer")).isVisible();
         assertThat(page.locator("#reorder-list")).isVisible();
+        page.waitForFunction(
+            "() => document.querySelector('#assignments-reorderer')?.updateComplete",
+            null,
+            new Page.WaitForFunctionOptions().setTimeout(20_000)
+        );
+        assertThat(page.locator("#reorder-list li.reorder-element .sakai-reorder-drag-handle.drag-handle, #reorder-list li.reorder-element .drag-handle").first())
+            .isVisible();
+    }
+
+    private void assertAssignmentReorderChrome() {
+        Locator portlet = page.locator(".portletBody.sakai-reorder");
+        assertThat(portlet).isVisible();
+        assertThat(portlet.locator(".page-header h1")).isVisible();
+        assertThat(portlet.locator(".instruction")).containsText(Pattern.compile("Drag assignments|move buttons|Save", Pattern.CASE_INSENSITIVE));
+        assertThat(page.locator(".sakai-reorder-undo.noPrint")).isVisible();
+        assertThat(page.locator("#undo-last")).isDisabled();
+        assertThat(page.locator("#undo-all")).isDisabled();
+        assertThat(page.locator("#reorder-list-sortingToolBar.sakai-reorder-list-header")).isVisible();
+        assertThat(page.locator("#reorder-list-sortingToolBar .bi-sort-up, #reorder-list-sortingToolBar .bi-sort-down, #reorder-list-sortingToolBar a").first()).isVisible();
+        assertThat(page.locator("#reorder-list li.reorder-element [data-action=\"move-up\"]").first()).isVisible();
+        assertThat(page.locator("#reorder-list li.reorder-element [data-action=\"move-down\"]").first()).isVisible();
+    }
+
+    private void dragAssignmentBefore(Locator source, Locator target) {
+        BoundingBox sourceBox = source.boundingBox();
+        BoundingBox targetBox = target.boundingBox();
+        if (sourceBox == null || targetBox == null) {
+            fail("Expected assignment reorder items to have bounding boxes.");
+            return;
+        }
+
+        double sourceX = sourceBox.x + sourceBox.width / 2;
+        double sourceY = sourceBox.y + sourceBox.height / 2;
+        double targetY = targetBox.y + targetBox.height / 4;
+
+        page.mouse().move(sourceX, sourceY);
+        page.mouse().down();
+        for (int step = 1; step <= 10; step++) {
+            page.mouse().move(sourceX, sourceY + (targetY - sourceY) * step / 10);
+        }
+        page.mouse().up();
+    }
+
+    private Locator moveAssignmentToTop(Locator reorderItems, String title, int reorderCount) {
+        Locator assignment = reorderItems.filter(new Locator.FilterOptions().setHasText(title)).first();
+        // At most (n - 1) moves are needed to reach the top from the last row.
+        for (int i = 0; i < reorderCount - 1; i++) {
+            assignment = reorderItems.filter(new Locator.FilterOptions().setHasText(title)).first();
+            Locator moveUp = assignment.locator("[data-action=\"move-up\"]");
+            if (moveUp.isDisabled()) {
+                break;
+            }
+            moveUp.click();
+        }
+        assignment = reorderItems.filter(new Locator.FilterOptions().setHasText(title)).first();
+        assertTrue(assignment.locator("[data-action=\"move-up\"]").isDisabled(),
+            "Expected move-up to be disabled after moving " + title + " to the top.");
+        return assignment;
+    }
+
+    private void assertAssignmentPrecedes(String selector, String firstTitle, String secondTitle) {
+        String listText = page.locator(selector).innerText();
+        int firstTitlePosition = listText.indexOf(firstTitle);
+        int secondTitlePosition = listText.indexOf(secondTitle);
+        if (firstTitlePosition < 0 || secondTitlePosition < 0) {
+            fail("Expected reorder list to contain " + firstTitle + " and " + secondTitle + ".");
+        }
+        if (firstTitlePosition >= secondTitlePosition) {
+            fail("Expected assignment " + firstTitle + " to precede " + secondTitle + ".");
+        }
     }
 
     private void createSimpleAssignment(String title) {

@@ -340,6 +340,24 @@ public interface AssignmentService extends EntityProducer {
     public void softDeleteAssignment(Assignment assignment) throws PermissionException;
 
     /**
+     * Whether deleting this group assignment can release its locks. Student work and grading
+     * keep the locks in place; empty grading placeholders do not, unless linked to a rubric.
+     */
+    boolean canReleaseGroupLocks(Assignment assignment);
+
+    /**
+     * Whether a submission contains student work or saved grading data, including a zero score.
+     * Empty grading placeholders and inherited resubmission defaults do not count as work.
+     */
+    boolean hasSubmissionWork(AssignmentSubmission submission);
+
+    /**
+     * Restore an assignment from Trash. Empty group assignments return as drafts so that
+     * instructors can review current groups before publishing. Missing groups are removed.
+     */
+    Assignment restoreAssignment(String assignmentId) throws IdUnusedException, PermissionException;
+
+    /**
      * Softly delete this Assignment and remove all references to it.
      *
      * @param assignment - The Assignment to softly delete.
@@ -490,6 +508,17 @@ public interface AssignmentService extends EntityProducer {
      * @return All submittable Assignments in the site mapped to the User IDs of those who can submit them.
      */
     public Map<Assignment, List<String>> getSubmittableAssignmentsForContext(String context);
+
+    /**
+     * Get eligible submitters visible to the current user and their gradable,
+     * non-anonymous assignments. Applies the site/group visibility rules and
+     * configured non-submitter permissions.
+     *
+     * @param context the site ID
+     * @param groupReference a group reference, or {@link AssignmentConstants#ALL} for all visible groups
+     * @return visible students mapped to their assignments; a student's list may be empty
+     */
+    Map<User, List<Assignment>> getAssignmentsByStudent(String context, String groupReference);
 
     /**
      * Access a User's AssignmentSubmission to a particular Assignment.

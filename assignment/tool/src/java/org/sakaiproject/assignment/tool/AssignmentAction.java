@@ -75,7 +75,6 @@ import java.util.UUID;
 import java.util.SortedSet;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.function.Function;
-import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -83,8 +82,8 @@ import java.util.stream.StreamSupport;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
-import javax.servlet.ServletConfig;
-import javax.servlet.ServletException;
+import jakarta.servlet.ServletConfig;
+import jakarta.servlet.ServletException;
 
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.io.FilenameUtils;
@@ -1878,8 +1877,7 @@ public class AssignmentAction extends PagedResourceActionII {
         context.put("name_ASSIGNMENT_INPUT_ADD_TIME_SPENT", ResourceProperties.ASSIGNMENT_INPUT_ADD_TIME_SPENT);
         context.put("value_ASSIGNMENT_INPUT_ADD_TIME_SPENT", state.getAttribute(ResourceProperties.ASSIGNMENT_INPUT_ADD_TIME_SPENT));
 
-        // SAK-21525 - Groups were not being queried for authz
-        boolean allowSubmit = assignmentService.allowAddSubmissionCheckGroups(assignment);
+        boolean allowSubmit = assignmentService.canSubmit(assignment);
         if (!allowSubmit) {
             addAlert(state, rb.getString("not_allowed_to_submit"));
         }
@@ -3185,22 +3183,22 @@ public class AssignmentAction extends PagedResourceActionII {
                 rangeAndGroups.buildInstructorNewEditAssignmentContextGroupCheck(context, a);
 
                 // controls to disable which groups can be changed
-                Collection<Group> groupsWithUserSubmission = new ArrayList<>();
+                Collection<Group> groupsWithSubmissionWork = new ArrayList<>();
                 if (a.getIsGroup()) {
                     try {
                         Site site = siteService.getSite(a.getContext());
                         Collection<Group> siteGroups = site.getGroups();
 
                         a.getSubmissions().stream()
-                                .filter(AssignmentSubmission::getUserSubmission)
+                                .filter(assignmentService::hasSubmissionWork)
                                 .forEach(s -> siteGroups.stream()
                                         .filter(g -> g.getId().equals(s.getGroupId()))
-                                        .findAny().ifPresent(groupsWithUserSubmission::add));
+                                        .findAny().ifPresent(groupsWithSubmissionWork::add));
                     } catch (IdUnusedException e) {
                         log.warn("Site not found for context {}, {}", a.getContext(), e.getMessage());
                     }
                 }
-                context.put("groupsWithUserSubmission", groupsWithUserSubmission);
+                context.put("groupsWithSubmissionWork", groupsWithSubmissionWork);
             }
         } else {
             boolean instructorGroupsProp = serverConfigurationService.getBoolean("assignments.assign.to.instructor.groups", false);
@@ -4116,6 +4114,7 @@ public class AssignmentAction extends PagedResourceActionII {
         context.put("confirmMessage", assignments.size() > 1 ? rb.getString(multipleConfirmMessage) : rb.getString(singleConfirmMessage));
         context.put("currentTime", Instant.now());
         context.put("submissionCountTable", submissionCountTable);
+        context.put("showGroupLockConsequences", operation == BulkOperation.DELETE);
 
         String template = getContext(data).get("template");
         return template + TEMPLATE_INSTRUCTOR_BULK_OPERATION;
@@ -5922,13 +5921,6 @@ public class AssignmentAction extends PagedResourceActionII {
         state.setAttribute(RESET_TABLE_STATE, false);
 
         String contextString = (String) state.getAttribute(STATE_CONTEXT_STRING);
-        Site site;
-        try {
-            site = siteService.getSite(contextString);
-        } catch (IdUnusedException e) {
-            throw new IllegalStateException("Can not build context for invalid site with id [" + contextString + "]");
-        }
-
         initViewSubmissionListOption(state);
         String allOrOneGroup = (String) state.getAttribute(VIEW_SUBMISSION_LIST_OPTION);
         Boolean searchFilterOnly = Boolean.TRUE.equals(state.getAttribute(SUBMISSIONS_SEARCH_ONLY));
@@ -5952,44 +5944,19 @@ public class AssignmentAction extends PagedResourceActionII {
         }
         context.put("hasAtLeastOneAnonAssignment", hasAtLeastOneAnonAssigment);
 
-        List<String> nonSubmitterPermissions = serverConfigurationService.getStringList(AssignmentConstants.SAK_PROP_NON_SUBMITTER_PERMISSIONS,
-                AssignmentConstants.SAK_PROP_NON_SUBMITTER_PERMISSIONS_DEFAULT);
-
-        Predicate<String> isNonSubmitter = (userId) -> nonSubmitterPermissions.stream()
-                .filter(permission -> securityService.unlock(userId, permission, site.getReference()))
-                .findAny()
-                .isEmpty();
-
-        Set<String> groupUsers = Collections.emptySet();
-
-        if (StringUtils.isBlank(allOrOneGroup) || AssignmentConstants.ALL.equals(allOrOneGroup)) {
-            if (securityService.unlock(userDirectoryService.getCurrentUser(), SECURE_ALL_GROUPS, siteService.siteReference(site.getId()))){
-                groupUsers = site.getUsers();
-            } else {
-                groupUsers = site.getGroupsWithMember(userDirectoryService.getCurrentUser().getId()).stream().map(Group::getUsers).flatMap(Set::stream).collect(Collectors.toSet());
-            }
-        } else {
-            groupUsers = site.getGroup(allOrOneGroup).getUsers();
-        }
-
-        Map<String, User> studentMembers = groupUsers.stream()
-                    .filter(isNonSubmitter)
-                    .map(userDirectoryService::getOptionalUser)
-                    .flatMap(Optional::stream)
-                    .collect(Collectors.toMap(User::getId, Function.identity()));
-
-        Comparator<Assignment> assignmentComparator = new AssignmentComparator(state, SORTED_BY_DEFAULT, Boolean.TRUE.toString());
+        Map<User, List<Assignment>> assignmentsByStudent = assignmentService.getAssignmentsByStudent(contextString, allOrOneGroup);
+        Map<String, User> studentMembers = assignmentsByStudent.keySet().stream()
+                .collect(Collectors.toMap(User::getId, Function.identity()));
 
         Map<User, Iterator<Assignment>> showStudentAssignments = new HashMap<>();
         Set<String> expandedStudents = (Set<String>) state.getAttribute(STUDENT_LIST_SHOW_TABLE);
         if (expandedStudents != null) {
             context.put("studentListShowSet", expandedStudents);
             for (String userId : expandedStudents) {
-                Set<Assignment> userSubmittableAssignments = assignments.stream()
-                        .filter(Predicate.not(assignmentService::assignmentUsesAnonymousGrading))
-                        .collect(Collectors.toSet());
-
-                showStudentAssignments.put(studentMembers.get(userId), userSubmittableAssignments.iterator());
+                User student = studentMembers.get(userId);
+                if (student != null) {
+                    showStudentAssignments.put(student, assignmentsByStudent.get(student).iterator());
+                }
             }
         }
 
@@ -7305,9 +7272,12 @@ public class AssignmentAction extends PagedResourceActionII {
             }
             if ((state.getAttribute(STATE_MESSAGE) == null) && (a != null)) {
                 AssignmentSubmission submission;
-                if (contentReviewService != null && Boolean.valueOf(eulaAgreementYes)) {
-                		//update EULA agreement timestamp
-                		contentReviewService.updateUserEULATimestamp(sessionManager.getCurrentSessionUserId());
+                if (contentReviewService != null && Boolean.valueOf(eulaAgreementYes)
+                        && StringUtils.isNotEmpty(contentReviewService.getEndUserLicenseAgreementLink(
+                                sessionManager.getCurrentSessionUserId()))
+                        && !contentReviewService.updateUserEULATimestamp(sessionManager.getCurrentSessionUserId())) {
+                    addAlert(state, rb.getString("saved.error"));
+                    return;
                 }
 
                 if (a.getIsGroup()) {
@@ -9993,7 +9963,7 @@ public class AssignmentAction extends PagedResourceActionII {
                     }).filter(Objects::nonNull).collect(Collectors.toList());
 
                     submissionsToRemove.stream()
-                            .filter(s -> !s.getUserSubmission())
+                            .filter(s -> a.getIsGroup() ? !assignmentService.hasSubmissionWork(s) : !s.getUserSubmission())
                             .forEach(s -> {
                                 try {
                                     assignmentService.removeSubmission(s);
@@ -11133,20 +11103,19 @@ public class AssignmentAction extends PagedResourceActionII {
                     a = assignmentService.getAssignment(id);
 
                     if (a != null) {
-                        a.setDeleted(false);
-                        assignmentService.updateAssignment(a);
+                        a = assignmentService.restoreAssignment(id);
 
                         rubricsService.restoreRubricAssociation(AssignmentConstants.TOOL_ID, id);
 
                         // restore email reminder only if reminder is set and the due date is after 1 day
-                        if (BooleanUtils.toBoolean(a.getProperties().get(NEW_ASSIGNMENT_REMINDER_EMAIL))
+                        if (!a.getDraft() && BooleanUtils.toBoolean(a.getProperties().get(NEW_ASSIGNMENT_REMINDER_EMAIL))
                                 && a.getDueDate() != null
                                 && Instant.now().plus(1, ChronoUnit.DAYS).isBefore(a.getDueDate())) {
                             assignmentDueReminderService.scheduleDueDateReminder(a.getId());
                         }
 
                         // Restore gradebook item only if assignment was previously associated
-                        if (StringUtils.equals(a.getProperties().get(NEW_ASSIGNMENT_ADD_TO_GRADEBOOK), GRADEBOOK_INTEGRATION_ASSOCIATE)) {
+                        if (!a.getDraft() && StringUtils.equals(a.getProperties().get(NEW_ASSIGNMENT_ADD_TO_GRADEBOOK), GRADEBOOK_INTEGRATION_ASSOCIATE)) {
                             String siteId = (String) state.getAttribute(STATE_CONTEXT_STRING);
                             Site site = siteService.getSite(siteId);
 

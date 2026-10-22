@@ -50,13 +50,13 @@ import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 import org.w3c.dom.Node;
 
-import javax.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequest;
 
 import org.apache.commons.lang3.BooleanUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.math.NumberUtils;
 import org.apache.commons.math3.util.Precision;
-import org.apache.http.client.utils.URIBuilder;
+import org.apache.hc.core5.net.URIBuilder;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.sakaiproject.api.privacy.PrivacyManager;
@@ -2300,8 +2300,6 @@ public class SakaiLTIUtil {
 			String jws = Jwts.builder().setHeaderParam("kid", kid).
 					setPayload(ljs).signWith(privateKey).compact();
 
-			log.debug("jws = {}", jws);
-
 			String debugProperty = toolProps.getProperty(LTIService.LTI_DEBUG);
 			boolean dodebug = LTI_PORTLET_ON.equals(debugProperty) || "1".equals(debugProperty);
 
@@ -2609,9 +2607,7 @@ public class SakaiLTIUtil {
 
 		// Check the message signature using OAuth
 		String oauth_secret = normalProps.getProperty(LTIService.LTI_SECRET);
-		log.debug("oauth_secret: {}", oauth_secret);
 		oauth_secret = decryptSecret(oauth_secret);
-		log.debug("oauth_secret (decrypted): {}", oauth_secret);
 
 		String oauth_consumer_key = normalProps.getProperty(LTIService.LTI_CONSUMERKEY);
 		log.debug("oauth_consumer_key: {}", oauth_consumer_key);
@@ -3123,7 +3119,12 @@ public class SakaiLTIUtil {
 			
 			// For individual submissions or when we know the specific user
 			if (!a.getIsGroup() || submission.getSubmitters().stream().anyMatch(s -> s.getSubmitter().equals(userId))) {
-				submission.getSubmitters().stream().filter(s -> s.getSubmitter().equals(userId)).findFirst().ifPresent(s -> s.setSubmittee(true));
+				if (a.getIsGroup()) {
+					// Make the just-scored user the sole submittee so the grading launch targets them.
+					submission.getSubmitters().forEach(s -> s.setSubmittee(s.getSubmitter().equals(userId)));
+				} else {
+					submission.getSubmitters().stream().filter(s -> s.getSubmitter().equals(userId)).findFirst().ifPresent(s -> s.setSubmittee(true));
+				}
 			}
 
 			// If we are in any of these states - set the grade to null

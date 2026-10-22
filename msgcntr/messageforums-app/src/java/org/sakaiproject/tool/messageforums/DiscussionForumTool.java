@@ -21,6 +21,7 @@
 package org.sakaiproject.tool.messageforums;
 
 import java.io.InputStream;
+import java.io.Serializable;
 import java.text.DecimalFormat;
 import java.text.NumberFormat;
 import java.text.ParseException;
@@ -47,22 +48,22 @@ import java.util.StringTokenizer;
 import java.util.TimeZone;
 import java.util.TreeSet;
 
-import javax.faces.bean.ManagedProperty;
-import javax.faces.application.FacesMessage;
-import javax.faces.bean.ManagedBean;
-import javax.faces.bean.SessionScoped;
-import javax.faces.component.UIData;
-import javax.faces.component.UIInput;
-import javax.faces.context.ExternalContext;
-import javax.faces.context.FacesContext;
-import javax.faces.event.ActionEvent;
-import javax.faces.event.ValueChangeEvent;
-import javax.faces.model.SelectItem;
-import javax.persistence.OptimisticLockException;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpSession;
+import jakarta.faces.bean.ManagedProperty;
+import jakarta.faces.bean.SessionScoped;
+import jakarta.faces.application.FacesMessage;
+import jakarta.faces.component.UIData;
+import jakarta.faces.component.UIInput;
+import jakarta.faces.context.ExternalContext;
+import jakarta.faces.context.FacesContext;
+import jakarta.faces.event.ActionEvent;
+import jakarta.faces.event.ValueChangeEvent;
+import jakarta.faces.model.SelectItem;
+import jakarta.faces.bean.ManagedBean;
+import jakarta.persistence.OptimisticLockException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 
-import org.apache.commons.fileupload.FileItem;
+import org.apache.commons.fileupload2.core.FileItem;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.sakaiproject.api.app.messageforums.AnonymousManager;
@@ -164,19 +165,14 @@ import org.sakaiproject.util.StringUtil;
 import org.sakaiproject.util.api.FormattedText;
 import org.sakaiproject.util.comparator.GroupTitleComparator;
 import org.sakaiproject.util.comparator.RoleIdComparator;
-
 import org.springframework.orm.hibernate5.HibernateOptimisticLockingFailureException;
+import org.sakaiproject.serialization.MapperFactory;
 import org.sakaiproject.rubrics.api.RubricsConstants;
 import org.sakaiproject.rubrics.api.RubricsService;
 
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
-import net.sf.json.JSON;
-import net.sf.json.JSONArray;
-import net.sf.json.JSONObject;
-import net.sf.json.JSONSerializer;
-import net.sf.json.JsonConfig;
 import org.sakaiproject.api.app.messageforums.events.ForumsMessageEventParams;
 import org.sakaiproject.api.app.messageforums.events.ForumsTopicEventParams;
 import static org.sakaiproject.component.app.messageforums.dao.hibernate.MessageImpl.DATE_COMPARATOR;
@@ -190,7 +186,9 @@ import static org.sakaiproject.component.app.messageforums.dao.hibernate.Message
 @Getter
 @ManagedBean(name="ForumTool")
 @SessionScoped
-public class DiscussionForumTool {
+public class DiscussionForumTool implements Serializable {
+
+  private static final long serialVersionUID = 1L;
 
   /**
    * List individual forum details
@@ -432,7 +430,7 @@ public class DiscussionForumTool {
   @ManagedProperty(value="#{Components[\"org.sakaiproject.api.app.messageforums.MembershipManager\"]}")
   private MembershipManager membershipManager;
   @ManagedProperty(value="#{Components[\"org.sakaiproject.api.app.messageforums.PermissionLevelManager\"]}")
-  private PermissionLevelManager permissionLevelManager; 
+  private PermissionLevelManager permissionLevelManager;
   @ManagedProperty(value="#{Components[\"org.sakaiproject.api.app.messageforums.EmailNotificationManager\"]}")
   private EmailNotificationManager emailNotificationManager;
   @ManagedProperty(value="#{Components[\"org.sakaiproject.api.app.messageforums.SynopticMsgcntrManager\"]}")
@@ -688,12 +686,14 @@ public class DiscussionForumTool {
         //Code to get the gradebook service from ComponentManager
         GradingService gradingService = getGradingService();
         
-		for (Assignment thisAssign : gradingService.getAssignments(toolManager.getCurrentPlacement().getContext(), toolManager.getCurrentPlacement().getContext(), SortType.SORT_BY_NONE)) {
-			if (!thisAssign.getExternallyMaintained()) {
-				try {
-					assignments.add(new SelectItem(Long.toString(thisAssign.getId()), thisAssign.getName()));
-				} catch (Exception e) {
-					log.error("DiscussionForumTool - processDfMsgGrd:" + e);
+		if (gradingService.isUserAbleToViewAssignments(toolManager.getCurrentPlacement().getContext())) {
+			for (Assignment thisAssign : gradingService.getAssignments(toolManager.getCurrentPlacement().getContext(), toolManager.getCurrentPlacement().getContext(), SortType.SORT_BY_NONE)) {
+				if (!thisAssign.getExternallyMaintained()) {
+					try {
+						assignments.add(new SelectItem(Long.toString(thisAssign.getId()), thisAssign.getName()));
+					} catch (Exception e) {
+						log.error("DiscussionForumTool - processDfMsgGrd:" + e);
+					}
 				}
 			}
 		}
@@ -6243,7 +6243,7 @@ public class DiscussionForumTool {
     return null;
   } 
 
-  public String currentChange;
+  private String currentChange;
   public void setCurrentChange(String newChange){
 	currentChange = newChange;
   }
@@ -7852,7 +7852,7 @@ public class DiscussionForumTool {
 		if ((watchSettingsBean !=null) && (watchSettingsBean.getEmailNotification()!=null)){
 			log.debug("watchSettingsBean !=null) && (watchSettingsBean.getEmailNotification()!=null");
 			EmailNotification newoption = watchSettingsBean.getEmailNotification();
-			emailNotificationManager.saveEmailNotification(newoption);
+			watchSettingsBean.setEmailNotification(emailNotificationManager.saveEmailNotification(newoption));
 		}
 		else {
 			log.debug("ForumTool.processActionSaveEmailNotificationOption(): Can not save because watchSettingsBean is null");
@@ -8844,18 +8844,18 @@ public class DiscussionForumTool {
 	public String getMoveThreadJSON() {
 		List allItemsList = new ArrayList();
 
-		Map<String, List<JSONObject>> topicMap = null;
-		Map<String, List<JSONObject>> forumMap = null;
+		Map<String, List<Map<String, Object>>> topicMap = null;
+		Map<String, List<Map<String, Object>>> forumMap = null;
 		List allforums = forumManager.getDiscussionForumsWithTopics(this.getSiteId());
 		if (allforums != null) {
 			Iterator iter = allforums.iterator();
 			if (allforums == null || allforums.size() < 1) {
 				return null;
 			}
-			topicMap = new HashMap<String, List<JSONObject>>();
-			forumMap = new HashMap<String, List<JSONObject>>();
-			topicMap.put("topics", new ArrayList<JSONObject>());
-			forumMap.put("forums", new ArrayList<JSONObject>());
+			topicMap = new HashMap<String, List<Map<String, Object>>>();
+			forumMap = new HashMap<String, List<Map<String, Object>>>();
+			topicMap.put("topics", new ArrayList<Map<String, Object>>());
+			forumMap.put("forums", new ArrayList<Map<String, Object>>());
 			while (iter.hasNext()) {
 				DiscussionForum tmpforum = (DiscussionForum) iter.next();
 				parseForums(tmpforum, forumMap);
@@ -8877,39 +8877,41 @@ public class DiscussionForumTool {
 			allItemsList.add(forumMap);
 		}
 
-		JsonConfig config = new JsonConfig();
-		JSON json = JSONSerializer.toJSON(allItemsList);
+		String json = MapperFactory.createDefaultJsonMapper().valueToTree(allItemsList).toString();
 		if (log.isDebugEnabled())
-			log.debug("converted getTotalTopicsJSON to json : " + json.toString(4, 0));
-		return json.toString(4, 0);
+			log.debug("Converted move thread data to JSON: {}", json);
+		return json;
 	}
 
-	private void parseForums(DiscussionForum forum, Map<String, List<JSONObject>> forumMap) {
+	private void parseForums(DiscussionForum forum, Map<String, List<Map<String, Object>>> forumMap) {
 		Long forumId = forum.getId();
 		String forumtitle = forum.getTitle();
 		Long forumid = forum.getId();
-		List<JSONObject> forumList = forumMap.get("forums");
+		List<Map<String, Object>> forumList = forumMap.get("forums");
 		if (forumList == null) {
-			forumList = new ArrayList<JSONObject>();
+			forumList = new ArrayList<Map<String, Object>>();
 		}
 
-		JSONObject forumJSON = new JSONObject();
-		forumJSON.element("forumid", forumId).element("forumtitle", forumtitle);
+		Map<String, Object> forumJSON = new HashMap<>();
+		forumJSON.put("forumid", forumId);
+		forumJSON.put("forumtitle", forumtitle);
 		forumList.add(forumJSON);
 	}
 
-	private void parseTopics(DiscussionTopic topic, Map<String, List<JSONObject>> topicMap, DiscussionForum tmpforum) {
+	private void parseTopics(DiscussionTopic topic, Map<String, List<Map<String, Object>>> topicMap, DiscussionForum tmpforum) {
 		Long topicId = topic.getId();
 		String forumtitle = tmpforum.getTitle();
 		Long forumid = tmpforum.getId();
-		List<JSONObject> topiclist = topicMap.get("topics");
+		List<Map<String, Object>> topiclist = topicMap.get("topics");
 		if (topiclist == null) {
-			topiclist = new ArrayList<JSONObject>();
+			topiclist = new ArrayList<Map<String, Object>>();
 		}
 		String title = topic.getTitle();
-		JSONObject topicJSON = new JSONObject();
-		topicJSON.element("topicid", topic.getId()).element("topictitle", title).element("forumid", forumid)
-		.element("forumtitle", forumtitle);
+		Map<String, Object> topicJSON = new HashMap<>();
+		topicJSON.put("topicid", topic.getId());
+		topicJSON.put("topictitle", title);
+		topicJSON.put("forumid", forumid);
+		topicJSON.put("forumtitle", forumtitle);
 		topiclist.add(topicJSON);
 	}
 
@@ -9027,21 +9029,20 @@ public class DiscussionForumTool {
 		}
 		List members = membershipManager.convertMemberMapToList(courseMemberMap);
 		List jsonList = transformItemList(members);
-		JsonConfig config = new JsonConfig();
-		JSON json = JSONSerializer.toJSON(jsonList);
+		String json = MapperFactory.createDefaultJsonMapper().valueToTree(jsonList).toString();
 		if (log.isDebugEnabled()) log.debug(" finished getTotalAssignToListJSON");
-		return json.toString(4, 0);
+		return json;
 	}
 
 	private List transformItemList(List members) {
-		Map<String, List<JSONObject>> rolesMap = new HashMap<String, List<JSONObject>>(1);
-		rolesMap.put("roles", new ArrayList<JSONObject>(1));
+		Map<String, List<Map<String, Object>>> rolesMap = new HashMap<String, List<Map<String, Object>>>(1);
+		rolesMap.put("roles", new ArrayList<Map<String, Object>>(1));
 
-		Map<String, List<JSONObject>> groupsMap = new HashMap<String, List<JSONObject>>(1);
-		groupsMap.put("groups", new ArrayList<JSONObject>(1));
+		Map<String, List<Map<String, Object>>> groupsMap = new HashMap<String, List<Map<String, Object>>>(1);
+		groupsMap.put("groups", new ArrayList<Map<String, Object>>(1));
 
-		Map<String, List<JSONObject>> usersMap = new HashMap<String, List<JSONObject>>(1);
-		usersMap.put("users", new ArrayList<JSONObject>());
+		Map<String, List<Map<String, Object>>> usersMap = new HashMap<String, List<Map<String, Object>>>(1);
+		usersMap.put("users", new ArrayList<Map<String, Object>>());
 
 		for (Iterator iterator = members.iterator(); iterator.hasNext();) {
 			MembershipItem item = (MembershipItem) iterator.next();
@@ -9077,8 +9078,8 @@ public class DiscussionForumTool {
 
 		// we only need the userIds to setup the individual user data
 		// so remove it before delivering to page
-		List<JSONObject> groupsList = groupsMap.get("groups");
-		for (JSONObject groupJSON : groupsList) {
+		List<Map<String, Object>> groupsList = groupsMap.get("groups");
+		for (Map<String, Object> groupJSON : groupsList) {
 			groupJSON.remove("userIds");
 		}
 		allItemsList.add(groupsMap);
@@ -9086,59 +9087,66 @@ public class DiscussionForumTool {
 		return allItemsList;
 	}
 
-	private void parseRoles(MembershipItem item, Map<String, List<JSONObject>> rolesMap) {
-		List<JSONObject> rolesList = rolesMap.get("roles");
+	private void parseRoles(MembershipItem item, Map<String, List<Map<String, Object>>> rolesMap) {
+		List<Map<String, Object>> rolesList = rolesMap.get("roles");
 		if (rolesList == null) {
-			rolesList = new ArrayList<JSONObject>();
+			rolesList = new ArrayList<Map<String, Object>>();
 		}
 		Role role = item.getRole();
 		List<String> userIds = new ArrayList<String>();
-		JSONObject rolesJSON = new JSONObject();
-		rolesJSON.element("membershipItemId", item.getId()).element("roleId", role.getId()).element("description", role.getDescription())
-				.element("userIds", userIds);
+		Map<String, Object> rolesJSON = new HashMap<>();
+		rolesJSON.put("membershipItemId", item.getId());
+		rolesJSON.put("roleId", role.getId());
+		rolesJSON.put("description", role.getDescription());
+		rolesJSON.put("userIds", userIds);
 		rolesList.add(rolesJSON);
 	}
 
-	private void parseGroups(MembershipItem item, Map<String, List<JSONObject>> groupsMap) {
+	private void parseGroups(MembershipItem item, Map<String, List<Map<String, Object>>> groupsMap) {
 		Group group = item.getGroup();
-		List<JSONObject> groupsList = groupsMap.get("groups");
+		List<Map<String, Object>> groupsList = groupsMap.get("groups");
 		if (groupsList == null) {
-			groupsList = new ArrayList<JSONObject>();
+			groupsList = new ArrayList<Map<String, Object>>();
 		}
 		Set<Member> groupMembers = (Set<Member>) group.getMembers();
 		List<String> userIds = new ArrayList<String>(groupMembers.size());
 		for (Member member : groupMembers) {
 			userIds.add(member.getUserId());
 		}
-		JSONObject groupJSON = new JSONObject().element("membershipItemId", item.getId()).element("groupId", group.getId())
-				.element("title", group.getTitle()).element("userIds", userIds);
+		Map<String, Object> groupJSON = new HashMap<>();
+		groupJSON.put("membershipItemId", item.getId());
+		groupJSON.put("groupId", group.getId());
+		groupJSON.put("title", group.getTitle());
+		groupJSON.put("userIds", userIds);
 		groupsList.add(groupJSON);
 	}
 
-	private void parseUsers(MembershipItem item, Map<String, List<JSONObject>> groupsMap, Map<String, List<JSONObject>> rolesMap,
-			Map<String, List<JSONObject>> usersMap) {
-		List<JSONObject> usersList = usersMap.get("users");
+	private void parseUsers(MembershipItem item, Map<String, List<Map<String, Object>>> groupsMap, Map<String, List<Map<String, Object>>> rolesMap,
+			Map<String, List<Map<String, Object>>> usersMap) {
+		List<Map<String, Object>> usersList = usersMap.get("users");
 		if (usersList == null) {
-			usersList = new ArrayList<JSONObject>();
+			usersList = new ArrayList<Map<String, Object>>();
 		}
 
-		JSONObject jsonMembershipItem = new JSONObject();
-		jsonMembershipItem.element("membershipItemId", item.getId()).element("roleId", item.getRole().getId())
-				.element("userDisplayName", item.getUser().getDisplayName()).element("eid", item.getUser().getEid());
+		Map<String, Object> jsonMembershipItem = new HashMap<>();
+		jsonMembershipItem.put("membershipItemId", item.getId());
+		jsonMembershipItem.put("roleId", item.getRole().getId());
+		jsonMembershipItem.put("userDisplayName", item.getUser().getDisplayName());
+		jsonMembershipItem.put("eid", item.getUser().getEid());
 		usersList.add(jsonMembershipItem);
 
-		JSONArray memberGroupsArray = new JSONArray();
-		List<JSONObject> groupsList = groupsMap.get("groups");
-		for (JSONObject jsonGroup : groupsList) {
+		List<Map<String, Object>> memberGroupsArray = new ArrayList<>();
+		List<Map<String, Object>> groupsList = groupsMap.get("groups");
+		for (Map<String, Object> jsonGroup : groupsList) {
 			List<String> userIds = (List<String>) jsonGroup.get("userIds");
 			if (userIds.contains(item.getUser().getId())) {
-				JSONObject memberGroupJSON = new JSONObject();
-				memberGroupJSON.element("groupId", jsonGroup.get("groupId"));
-				memberGroupJSON.element("title", jsonGroup.get("title"));
+				Map<String, Object> memberGroupJSON = new HashMap<>();
+				memberGroupJSON.put("groupId", jsonGroup.get("groupId"));
+				memberGroupJSON.put("title", jsonGroup.get("title"));
 				memberGroupsArray.add(memberGroupJSON);
 			}
 		}
-		jsonMembershipItem.element("groups", memberGroupsArray);
+		jsonMembershipItem.put("groups", memberGroupsArray);
 	}
 
 	private List<ForumRankBean> rankBeanList = new ArrayList<ForumRankBean>();
@@ -9173,7 +9181,7 @@ public class DiscussionForumTool {
 	private boolean just_created = false;
 	private boolean imageDeletePending = false;
 
-	public void saveRank(Rank newRank) {
+	public Rank saveRank(Rank newRank) {
 		if ((forumRankBean != null) && (newRank != null)) {
 			if (log.isDebugEnabled()) log.debug("saveRank:   forumRankBean !=null) && (newRank!=null");
 
@@ -9188,20 +9196,22 @@ public class DiscussionForumTool {
 				if (log.isDebugEnabled()) log.debug("user_id = " + assignToIds);
 				newRank.setAssignToIds(assignToIds);
 				newRank.setMinPosts(0);
-				rankManager.saveRank(newRank);
+				newRank = rankManager.saveRank(newRank);
 			} else if (Rank.RANK_TYPE_POST_COUNT.equalsIgnoreCase(selectedRankType)) { // by # of post
 				if (log.isDebugEnabled()) log.debug("saveRank:  RANK_TYPE_POST_COUNT ");
 
 				newRank.setType(Rank.RANK_TYPE_POST_COUNT);
-				rankManager.saveRank(newRank);
+				newRank = rankManager.saveRank(newRank);
 			} else {
 				log.warn("ForumTool.saveRank(): should not come here.  The type is undefined.");
 			}
+			forumRankBean.setRank(newRank);
 			this.setSelectedIndividualMemberItemIds(null);
 		} else {
 			if (log.isDebugEnabled()) log.debug("ForumTool.saveRank(): Can not save because forumRankBean is null");
 			// should not come here
 		}
+		return newRank;
 	}
 
 	public void saveRankImages(Rank rank) {
@@ -9315,7 +9325,7 @@ public class DiscussionForumTool {
 		Rank newRank = this.forumRankBean.getRank(); // rankManager.getRankById(this.forumRankBean.getRank().getId());
 		newRank.setTitle(forumRankBean.getTitle());
 		newRank.setMinPosts(forumRankBean.getMinPosts());
-		saveRank(newRank);
+		newRank = saveRank(newRank);
 		saveRankImages(newRank);
 		return processActionViewRanks();
 	}
@@ -9333,7 +9343,7 @@ public class DiscussionForumTool {
 		Rank newRank = this.forumRankBean.getRank();
 		newRank.setTitle(forumRankBean.getTitle());
 		newRank.setMinPosts(forumRankBean.getMinPosts());
-		saveRank(newRank);
+		newRank = saveRank(newRank);
 		saveRankImages(newRank);
 		return processActionViewRanks();
 	}

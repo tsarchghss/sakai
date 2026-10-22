@@ -19,7 +19,6 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
-import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -68,6 +67,7 @@ import org.sakaiproject.sitestats.api.view.SiteStatsReportAccessService;
 import org.sakaiproject.sitestats.api.view.SiteStatsReportExportService;
 import org.sakaiproject.sitestats.api.view.SiteStatsReportPreviewService;
 import org.sakaiproject.sitestats.api.view.SiteStatsReportRequest;
+import org.sakaiproject.sitestats.api.view.SiteStatsResourceSearchService;
 import org.sakaiproject.sitestats.api.view.SiteStatsReportSummary;
 import org.sakaiproject.sitestats.api.view.SiteStatsViewService;
 import org.sakaiproject.sitestats.api.view.SiteStatsWidget;
@@ -111,6 +111,8 @@ public class SiteStatsToolService {
     private final LocaleService localeService;
     private final UserTimeService userTimeService;
     private final ResolvedRefTransformer resolvedRefTransformer;
+    private final SiteStatsResourceSearchService resourceSearchService;
+    private final ObjectMapper objectMapper = MapperFactory.createDefaultJsonMapper();
 
     public SiteStatsToolService(StatsManager statsManager, StatsUpdateManager statsUpdateManager,
             EventRegistryService eventRegistryService, SiteStatsToolEventsService siteStatsToolEventsService,
@@ -121,7 +123,7 @@ public class SiteStatsToolService {
             SiteService siteService, AuthzGroupService authzGroupService, UserDirectoryService userDirectoryService,
             LocaleService localeService,
             @Qualifier("org.sakaiproject.time.api.UserTimeService") UserTimeService userTimeService,
-            ResolvedRefTransformer resolvedRefTransformer) {
+            ResolvedRefTransformer resolvedRefTransformer, SiteStatsResourceSearchService resourceSearchService) {
         this.statsManager = statsManager;
         this.statsUpdateManager = statsUpdateManager;
         this.eventRegistryService = eventRegistryService;
@@ -140,6 +142,18 @@ public class SiteStatsToolService {
         this.localeService = localeService;
         this.userTimeService = userTimeService;
         this.resolvedRefTransformer = resolvedRefTransformer;
+        this.resourceSearchService = resourceSearchService;
+    }
+
+    public String selectedResourcesJson(String siteId, SiteStatsReportForm form) {
+        if (!ReportManager.WHAT_RESOURCES.equals(form.getWhat())) {
+            return "[]";
+        }
+        try {
+            return objectMapper.writeValueAsString(resourceSearchService.selected(siteId, form.resourceIdList()));
+        } catch (JsonProcessingException failure) {
+            throw new IllegalStateException("Unable to serialize selected report resources", failure);
+        }
     }
 
     public String currentSiteId() {
@@ -161,8 +175,22 @@ public class SiteStatsToolService {
         return overview;
     }
 
+    private SiteStatsOverview institutionalOverview(String requestedSiteId) {
+        String siteId = adminSite(requestedSiteId);
+        SiteStatsOverview overview = siteStatsViewService.getInstitutionalOverview(siteId);
+        statsManager.logEvent(null, StatsManager.LOG_ACTION_VIEW, siteId, true);
+        return overview;
+    }
+
     public OverviewResult overviewWithEndpoints(String requestedSiteId) {
-        SiteStatsOverview overview = overview(requestedSiteId);
+        return overviewResult(overview(requestedSiteId));
+    }
+
+    public OverviewResult institutionalOverviewWithEndpoints(String requestedSiteId) {
+        return overviewResult(institutionalOverview(requestedSiteId));
+    }
+
+    private OverviewResult overviewResult(SiteStatsOverview overview) {
         Map<String, String> widgetEndpoints = new LinkedHashMap<String, String>();
         Map<String, String> metricEndpoints = new LinkedHashMap<String, String>();
         Map<String, String> highlightEndpoints = new LinkedHashMap<String, String>();
@@ -170,7 +198,6 @@ public class SiteStatsToolService {
         SiteStatsReportRequest reportRequest = new SiteStatsReportRequest();
         reportRequest.setIncludeTable(true);
         reportRequest.setIncludeChart(true);
-        ObjectMapper objectMapper = MapperFactory.createDefaultJsonMapper();
         for (SiteStatsWidget widget : overview.getWidgets()) {
             if (widget.isVisible()) {
                 if (!widget.getMetrics().isEmpty()) {
@@ -369,8 +396,7 @@ public class SiteStatsToolService {
         params.setWhatLimitedAction(form.isWhatLimitedAction());
         params.setWhatLimitedResourceIds(form.isWhatLimitedResourceIds());
         params.setWhatResourceAction(form.getWhatResourceAction());
-        params.setWhatResourceIds(Arrays.stream(StringUtils.defaultString(form.getWhatResourceIds()).split("[\\r\\n]+"))
-                .map(String::trim).filter(StringUtils::isNotBlank).collect(Collectors.toList()));
+        params.setWhatResourceIds(new ArrayList<>(form.resourceIdList()));
         params.setWhen(form.getWhen());
         ZoneId zoneId = userTimeService.getLocalTimeZone().toZoneId();
         if (form.getWhenFrom() != null) {

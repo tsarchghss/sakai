@@ -20,6 +20,11 @@ import static com.microsoft.playwright.assertions.PlaywrightAssertions.assertTha
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.options.AriaRole;
+import com.sun.net.httpserver.HttpServer;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.util.Base64;
 import java.util.List;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.MethodOrderer;
@@ -85,7 +90,10 @@ class LessonsTest extends SakaiUiTestBase {
 
         addSubpage("Promote Me");
 
-        sakai.toolClick("Lessons");
+        page.getByRole(AriaRole.BUTTON,
+            new Page.GetByRoleOptions().setName("Back").setExact(true)).first().click();
+        assertThat(page.getByRole(AriaRole.LINK,
+            new Page.GetByRoleOptions().setName("Promote Me").setExact(true))).isVisible();
         openAddMorePages();
         chooseExistingPageForSiteNavigation();
 
@@ -117,7 +125,25 @@ class LessonsTest extends SakaiUiTestBase {
 
     @Test
     @Order(4)
-    void resizingEmbeddedImagePreservesItsMediaType() {
+    void canRestoreTopLevelPageRemovedViaMoreTools() {
+        restoreTopLevelPageAfterRemoval("Restore More Tools", this::removeTopLevelPageViaMoreTools);
+    }
+
+    @Test
+    @Order(5)
+    void canRestoreTopLevelPageRemovedViaManageTools() {
+        restoreTopLevelPageAfterRemoval("Restore Manage Tools", this::removeTopLevelPageViaManageTools);
+    }
+
+    @Test
+    @Order(6)
+    void canRestoreTopLevelPageRemovedViaToolOrder() {
+        restoreTopLevelPageAfterRemoval("Restore Tool Order", this::removeTopLevelPageViaToolOrder);
+    }
+
+    @Test
+    @Order(7)
+    void resizingEmbeddedImagePreservesItsMediaType() throws IOException {
         if (sakaiUrl == null) {
             canCreateNewCourse();
         }
@@ -125,39 +151,196 @@ class LessonsTest extends SakaiUiTestBase {
         page.navigate(sakaiUrl);
         sakai.toolClick("Lessons");
 
-        // The query string prevents extension fallback from masking a lost MIME type.
-        String imageUrl = "https://www.google.com/images/branding/googlelogo/2x/"
-            + "googlelogo_color_272x92dp.png?regression=SAK-52825";
-        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Add Content")).first().click();
-        page.locator("#addContentDiv .add-multimedia").click();
-        Locator addDialog = page.locator("#add-multimedia-dialog");
-        assertThat(addDialog).isVisible();
-        addDialog.locator("#new-url-section-collapse").click();
-        addDialog.locator("#mm-url").fill(imageUrl);
-        addDialog.locator("#mm-add-item").click();
+        // Sakai probes the URL server-side; keep that request and the browser's image
+        // request independent of public hosts and development TLS certificates.
+        HttpServer imageServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        byte[] png = Base64.getDecoder().decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgKF/1HwADvQIhA4EOVwAAAABJRU5ErkJggg==");
+        imageServer.createContext("/image.png", exchange -> {
+            exchange.getResponseHeaders().set("Content-Type", "image/png");
+            exchange.sendResponseHeaders(200, png.length);
+            try (OutputStream response = exchange.getResponseBody()) {
+                response.write(png);
+            }
+        });
+        imageServer.start();
+        try {
+            // The query string prevents extension fallback from masking a lost MIME type.
+            String imageUrl = "http://127.0.0.1:" + imageServer.getAddress().getPort()
+                + "/image.png?regression=SAK-52825";
+            page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Add Content")).first().click();
+            page.locator("#addContentDiv .add-multimedia").click();
+            Locator addDialog = page.locator("#add-multimedia-dialog");
+            assertThat(addDialog).isVisible();
+            addDialog.locator("#new-url-section-collapse").click();
+            addDialog.locator("#mm-url").fill(imageUrl);
+            addDialog.locator("#mm-add-item").click();
 
-        Locator embeddedImage = page.locator("img.multimedia");
-        assertThat(embeddedImage).hasAttribute("src", imageUrl);
-        assertThat(embeddedImage).isVisible();
-        embeddedImage.hover();
-        page.locator(".image-col .multimedia-edit").click();
-        Locator editDialog = page.locator("#edit-multimedia-dialog");
-        assertThat(editDialog).isVisible();
-        editDialog.locator("#width").fill("120");
-        editDialog.locator("#height").fill("80");
-        editDialog.locator("#alt").fill("Resized logo");
-        editDialog.locator("#edit-multimedia-item").click();
+            Locator embeddedImage = page.locator("img.multimedia");
+            assertThat(embeddedImage).hasAttribute("src", imageUrl);
+            assertThat(embeddedImage).hasJSProperty("naturalWidth", 1);
+            assertThat(embeddedImage).isVisible();
+            embeddedImage.hover();
+            page.locator(".image-col .multimedia-edit").click();
+            Locator editDialog = page.locator("#edit-multimedia-dialog");
+            assertThat(editDialog).isVisible();
+            editDialog.locator("#width").fill("120");
+            editDialog.locator("#height").fill("80");
+            editDialog.locator("#alt").fill("Resized logo");
+            editDialog.locator("#edit-multimedia-item").click();
 
-        assertThat(embeddedImage).isVisible();
-        assertThat(embeddedImage).hasAttribute("width", "120");
-        assertThat(embeddedImage).hasAttribute("height", "80");
-        assertThat(embeddedImage).hasAttribute("alt", "Resized logo");
-        page.reload();
-        assertThat(embeddedImage).isVisible();
-        assertThat(embeddedImage).hasAttribute("width", "120");
-        assertThat(embeddedImage).hasAttribute("height", "80");
-        assertThat(embeddedImage).hasAttribute("alt", "Resized logo");
-        assertThat(page.locator(".image-col .mm-type")).hasText("image/png");
+            assertThat(embeddedImage).isVisible();
+            assertThat(embeddedImage).hasAttribute("width", "120");
+            assertThat(embeddedImage).hasAttribute("height", "80");
+            assertThat(embeddedImage).hasAttribute("alt", "Resized logo");
+            page.reload();
+            assertThat(embeddedImage).isVisible();
+            assertThat(embeddedImage).hasAttribute("width", "120");
+            assertThat(embeddedImage).hasAttribute("height", "80");
+            assertThat(embeddedImage).hasAttribute("alt", "Resized logo");
+            assertThat(page.locator(".image-col .mm-type")).hasText("image/png");
+        } finally {
+            imageServer.stop(0);
+        }
+    }
+
+    private void restoreTopLevelPageAfterRemoval(String title, java.util.function.Consumer<String> removePage) {
+        if (sakaiUrl == null) {
+            canCreateNewCourse();
+        }
+        sakai.login("instructor1");
+        page.navigate(sakaiUrl);
+        sakai.toolClick("Lessons");
+
+        createTopLevelPage(title);
+        assertNavigationLinkCount(title, 1);
+
+        removePage.accept(title);
+        assertNavigationLinkCount(title, 0);
+
+        sakai.toolClick("Lessons");
+        openAddMorePages();
+        chooseExistingPageForSiteNavigation();
+        Locator removedRadio = page.locator("#removed-pages input[type=radio][title^=\"" + title + " \"]").first();
+        assertThat(removedRadio).isEnabled();
+        removedRadio.check();
+        useSelectedItem();
+
+        sakai.toolClick(title);
+        assertThat(page.locator(".neoPortletTitleWrap")).containsText(title);
+        assertNavigationLinkCount(title, 1);
+    }
+
+    private void createTopLevelPage(String title) {
+        openAddMorePages();
+        Locator newPageDialog = page.locator("#new-page-dialog");
+        newPageDialog.locator("#newPage").fill(title);
+        newPageDialog.getByRole(AriaRole.BUTTON,
+            new Locator.GetByRoleOptions().setName("Save").setExact(true)).click();
+        page.waitForLoadState();
+        sakai.toolClick(title);
+        assertThat(page.locator(".neoPortletTitleWrap")).containsText(title);
+    }
+
+    private void removeTopLevelPageViaMoreTools(String title) {
+        sakai.toolClick(title);
+        page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("More Tools")).click();
+        Locator moreToolsDialog = page.locator("#moreDiv");
+        assertThat(moreToolsDialog).isVisible();
+        moreToolsDialog.getByRole(AriaRole.BUTTON,
+            new Locator.GetByRoleOptions().setName("Remove Page").setExact(true)).click();
+        assertThat(page.locator("#remove-page-dialog")).isVisible();
+        page.locator("#remove-page-submit").click();
+        page.waitForURL(Pattern.compile(".*/portal/site/.*"));
+        page.waitForLoadState();
+    }
+
+    private void removeTopLevelPageViaManageTools(String title) {
+        sakai.toolClick("Site Info");
+        page.locator(".navIntraTool a, .navIntraTool button")
+            .filter(new Locator.FilterOptions().setHasText(Pattern.compile("^Manage Tools$", Pattern.CASE_INSENSITIVE)))
+            .first()
+            .click(new Locator.ClickOptions().setForce(true));
+        page.waitForLoadState();
+
+        Locator expandAll = page.locator("#expandAll");
+        if (expandAll.count() > 0 && expandAll.isVisible()) {
+            expandAll.click(new Locator.ClickOptions().setForce(true));
+        }
+
+        Locator checkbox = page.locator("#toolHolder .toolListControl")
+            .filter(new Locator.FilterOptions().setHas(page.getByText(title,
+                new Page.GetByTextOptions().setExact(true))))
+            .locator("input[type=\"checkbox\"][name=\"selectedTools\"]")
+            .first();
+        if (checkbox.count() == 0) {
+            checkbox = page.getByRole(AriaRole.CHECKBOX,
+                new Page.GetByRoleOptions().setName(title).setExact(true)).first();
+        }
+        assertThat(checkbox).isVisible();
+        assertThat(checkbox).isChecked();
+        checkbox.uncheck(new Locator.UncheckOptions().setForce(true));
+
+        page.locator("#btnContinue").click(new Locator.ClickOptions().setForce(true));
+        page.waitForLoadState();
+        clickContinueOrFinish();
+        page.waitForLoadState();
+        page.navigate(sakaiUrl);
+        assertNavigationLinkCount(title, 0);
+    }
+
+    private void removeTopLevelPageViaToolOrder(String title) {
+        sakai.toolClick("Site Info");
+        page.locator(".navIntraTool").getByRole(AriaRole.LINK,
+            new Locator.GetByRoleOptions().setName("Tool Order").setExact(true)).click();
+        page.waitForLoadState();
+
+        Locator app = page.locator("#tool-order-app");
+        assertThat(app).isVisible();
+
+        Locator row = page.locator(".tool-order-row")
+            .filter(new Locator.FilterOptions().setHas(page.getByText(title,
+                new Page.GetByTextOptions().setExact(true))))
+            .first();
+        if (row.count() == 0) {
+            row = page.locator(".tool-order-row")
+                .filter(new Locator.FilterOptions().setHasText(title))
+                .first();
+        }
+        assertThat(row).isVisible();
+        Locator deleteButton = row.locator("[data-action=\"delete\"]");
+        assertThat(deleteButton).isVisible();
+        page.onceDialog(dialog -> dialog.accept());
+        deleteButton.click();
+        assertThat(page.locator("#tool-order-alert"))
+            .containsText(Pattern.compile("successfully removed", Pattern.CASE_INSENSITIVE));
+        assertThat(page.locator(".tool-order-row")
+            .filter(new Locator.FilterOptions().setHasText(title))).hasCount(0);
+
+        page.getByRole(AriaRole.BUTTON,
+            new Page.GetByRoleOptions().setName(Pattern.compile("Done", Pattern.CASE_INSENSITIVE))).click();
+        page.waitForLoadState();
+        page.navigate(sakaiUrl);
+        assertNavigationLinkCount(title, 0);
+    }
+
+    private void assertNavigationLinkCount(String title, int expectedCount) {
+        Locator currentSiteNavigation = page.locator(
+            "li.site-list-item.is-current-site .site-page-list a.btn-nav");
+        // Count exact labels in the DOM, including links in collapsed tool lists.
+        assertThat(currentSiteNavigation.filter(new Locator.FilterOptions()
+            .setHas(page.getByText(title, new Page.GetByTextOptions().setExact(true)))))
+            .hasCount(expectedCount);
+    }
+
+    private void clickContinueOrFinish() {
+        Locator button = page.locator(
+            "input#revise, input[type=\"submit\"][value*=\"Finish\"], button:has-text(\"Finish\"), "
+                + "input[type=\"submit\"][value*=\"Continue\"], button:has-text(\"Continue\")"
+        ).first();
+        assertThat(button).isVisible();
+        button.click(new Locator.ClickOptions().setForce(true));
+        page.waitForLoadState();
     }
 
     private void addSubpage(String title) {

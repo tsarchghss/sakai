@@ -32,15 +32,15 @@ import java.util.List;
 import java.util.Set;
 import java.util.Map;
 
-import javax.faces.bean.ManagedBean;
-import javax.faces.bean.SessionScoped;
-import javax.faces.model.SelectItem;
-
+import jakarta.faces.bean.SessionScoped;
+import jakarta.faces.model.SelectItem;
+import jakarta.faces.bean.ManagedBean;
 import lombok.extern.slf4j.Slf4j;
 import lombok.Getter;
 import lombok.Setter;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.math3.util.Precision;
+import org.sakaiproject.tool.assessment.util.TagJson;
 import org.sakaiproject.component.cover.ComponentManager;
 import org.sakaiproject.event.cover.EventTrackingService;
 import org.sakaiproject.samigo.util.SamigoConstants;
@@ -162,24 +162,7 @@ public class ItemContentsBean implements Serializable {
 
 	private String tagListToJsonString(Set<ItemTagIfc> tagsListToConvert){
 
-		String tagsListToJson = "[";
-		if (tagsListToConvert!=null) {
-			Iterator<ItemTagIfc> i = tagsListToConvert.iterator();
-			Boolean more = false;
-			while (i.hasNext()) {
-				if (more) {
-					tagsListToJson += ",";
-				}
-				ItemTagIfc tagToShow = (ItemTagIfc) i.next();
-				String tagId = tagToShow.getTagId();
-				String tagLabel = tagToShow.getTagLabel();
-				String tagCollectionName = tagToShow.getTagCollectionName();
-				tagsListToJson += "{\"tagId\":\"" + tagId + "\",\"tagLabel\":\"" + tagLabel + "\",\"tagCollectionName\":\"" + tagCollectionName + "\"}";
-				more = true;
-			}
-		}
-		tagsListToJson += "]";
-		return tagsListToJson;
+		return TagJson.serialize(tagsListToConvert == null ? null : tagsListToConvert.stream().map(TagJson::fromTag).toList());
 	}
 
 
@@ -385,10 +368,14 @@ public class ItemContentsBean implements Serializable {
 		if (itemgradingdataArray.isEmpty()) {
 			return true;
 		}
+		Long typeId = getItemData().getTypeId();
+		if (TypeIfc.FILE_UPLOAD.equals(typeId) || TypeIfc.AUDIO_RECORDING.equals(typeId)) {
+			return getMediaArray().isEmpty();
+		}
 		Iterator<ItemGradingData> iter = itemgradingdataArray.iterator();
 		int itemgradingsize =itemgradingdataArray.size();
 		int publishedanswer_notnull = 0;
-		if (getItemData().getTypeId().equals(TypeIfc.MATCHING)) 
+		if (TypeIfc.MATCHING.equals(typeId))
 			// SAM-776: Every choice has to be filled in before a question is considered answered 
 		{
 			while (iter.hasNext()) {
@@ -407,9 +394,10 @@ public class ItemContentsBean implements Serializable {
 		else {
 		while (iter.hasNext()) {
 			ItemGradingData data = (ItemGradingData) iter.next();
-			if (getItemData().getTypeId().equals(TypeIfc.ESSAY_QUESTION)
-					|| getItemData().getTypeId().equals(TypeIfc.FILL_IN_BLANK)
-					|| getItemData().getTypeId().equals(TypeIfc.FILL_IN_NUMERIC) // SAM-330
+			if (TypeIfc.ESSAY_QUESTION.equals(typeId)
+					|| TypeIfc.FILL_IN_BLANK.equals(typeId)
+					|| TypeIfc.FILL_IN_NUMERIC.equals(typeId) // SAM-330
+					|| TypeIfc.CALCULATED_QUESTION.equals(typeId)
 					) 
 			{
 				if (data.getAnswerText() != null
@@ -417,7 +405,7 @@ public class ItemContentsBean implements Serializable {
 					return false;
 				}
 			}
-			else if (getItemData().getTypeId().equals(TypeIfc.IMAGEMAP_QUESTION)) {
+			else if (TypeIfc.IMAGEMAP_QUESTION.equals(typeId)) {
 				if (StringUtils.isNotEmpty(data.getAnswerText())
 						&& data.getAnswerText().matches("\\{\"x\":-?\\d+,\"y\":-?\\d+\\}")) {
 					return false;

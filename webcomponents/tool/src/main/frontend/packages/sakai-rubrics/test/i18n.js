@@ -1,6 +1,11 @@
 export const i18nUrl = /getI18nProperties.*rubrics$/;
 
 export const i18n = `
+last_modified_by=Last Modified By
+unknown_user=Unknown
+save_conflict=Someone else changed this rubric or evaluation. Your changes have not been saved.
+operation_failed=Unable to save your changes. Try again.
+rating_points_required=Enter a point value for this rating.
 grading_rubric=Grading Rubric
 rubric=Rubric
 criterion=Criterion
@@ -68,6 +73,7 @@ standard_label=Switch to Weighted Grading
 weighted_status=Weighted Rubric
 draft_label=Draft
 draft_turn_on=Save as Draft
+draft_in_use=Unlink this rubric from all items before saving it as a draft.
 draft_turn_off=Publish Rubric
 draft_info=While saved as draft, the rubric won't be available from other tools.
 draft_invalid_weight_publish=In order to publish the rubric:\u0020

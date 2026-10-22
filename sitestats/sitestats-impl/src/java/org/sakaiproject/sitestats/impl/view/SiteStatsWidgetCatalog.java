@@ -1,12 +1,30 @@
-/**
- * Copyright (c) 2026 The Apereo Foundation
+/*
+ * Copyright (c) 2003-2026 The Apereo Foundation
  *
- * Licensed under the Educational Community License, Version 2.0.
+ * Licensed under the Educational Community License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *             http://opensource.org/licenses/ecl2
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.sakaiproject.sitestats.impl.view;
 
+import static org.sakaiproject.sitestats.api.view.SiteStatsWidgetIds.AUDIENCE_ADMIN;
 import static org.sakaiproject.sitestats.api.view.SiteStatsWidgetIds.AUDIENCE_ALL;
 import static org.sakaiproject.sitestats.api.view.SiteStatsWidgetIds.AUDIENCE_OWN;
+import static org.sakaiproject.sitestats.api.view.SiteStatsWidgetIds.WIDGET_CLIENT_ENVIRONMENT;
+import static org.sakaiproject.sitestats.api.view.SiteStatsWidgetIds.WIDGET_COMMUNICATION;
+import static org.sakaiproject.sitestats.api.view.SiteStatsWidgetIds.WIDGET_INSTITUTIONAL_AUTHORING_ACTIVITY;
+import static org.sakaiproject.sitestats.api.view.SiteStatsWidgetIds.WIDGET_INSTITUTIONAL_LEARNER_ACTIVITY;
+import static org.sakaiproject.sitestats.api.view.SiteStatsWidgetIds.WIDGET_INSTITUTIONAL_PRESENCE;
+import static org.sakaiproject.sitestats.api.view.SiteStatsWidgetIds.WIDGET_PLATFORM_HEALTH;
+import static org.sakaiproject.sitestats.api.view.SiteStatsWidgetIds.WIDGET_STUDENT_COMMUNICATION;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -43,7 +61,7 @@ public class SiteStatsWidgetCatalog {
 		overview.setAdminAllowed(adminAllowed);
 
 		for (WidgetSpec spec : widgetSpecs.values()) {
-			if (!spec.isAvailable() || !isAudienceAllowed(spec.getAudience(), allAllowed, ownAllowed)) {
+			if (!spec.isAvailable() || !isAudienceAllowed(spec.getAudience(), allAllowed, ownAllowed, adminAllowed)) {
 				continue;
 			}
 			overview.getWidgets().add(toWidget(siteId, spec, userId));
@@ -99,9 +117,19 @@ public class SiteStatsWidgetCatalog {
 		return spec != null && AUDIENCE_OWN.equals(spec.getAudience());
 	}
 
+	public boolean isAdminOnlyWidget(String widgetId) {
+		WidgetSpec spec = widgetSpecs.get(widgetId);
+		return spec != null && AUDIENCE_ADMIN.equals(spec.getAudience());
+	}
+
 	public boolean isOwnOnlyMetric(String widgetId, String metricId) {
 		WidgetMetricSpec spec = metricSpecs.get(key(widgetId, metricId));
 		return spec != null && AUDIENCE_OWN.equals(spec.getAudience());
+	}
+
+	public boolean isAdminOnlyMetric(String widgetId, String metricId) {
+		WidgetMetricSpec spec = metricSpecs.get(key(widgetId, metricId));
+		return spec != null && AUDIENCE_ADMIN.equals(spec.getAudience());
 	}
 
 	public WidgetReportDefinition getWidgetReportDefinition(String siteId, String widgetId, String tabId,
@@ -176,7 +204,11 @@ public class SiteStatsWidgetCatalog {
 		metricSpecs = Collections.unmodifiableMap(metrics);
 	}
 
-	private boolean isAudienceAllowed(String audience, boolean allAllowed, boolean ownAllowed) {
+	private boolean isAudienceAllowed(String audience, boolean allAllowed, boolean ownAllowed, boolean adminAllowed) {
+		// Institutional Summary: only AUDIENCE_ADMIN widgets (all/own forced false by caller).
+		if (adminAllowed && !allAllowed && !ownAllowed) {
+			return AUDIENCE_ADMIN.equals(audience);
+		}
 		return (AUDIENCE_ALL.equals(audience) && allAllowed)
 				|| (AUDIENCE_OWN.equals(audience) && ownAllowed && !allAllowed);
 	}
@@ -198,7 +230,7 @@ public class SiteStatsWidgetCatalog {
 		}
 		widget.setTabs(tabs);
 		widget.setMetrics(toMetrics(siteId, spec, userId, false, null));
-		widget.setHighlights(toHighlights(siteId, spec, userId, null));
+		widget.setHighlights(Collections.emptyList());
 		widget.setToolFilters(support.getFilterCatalog().toolFilters(siteId, spec.getId(), spec.getToolFilterIds()));
 		widget.setHighlightsConfigured(spec.getHighlights() != null && !spec.getHighlights().isEmpty());
 		return widget;
@@ -219,12 +251,75 @@ public class SiteStatsWidgetCatalog {
 	private List<SiteStatsWidgetMetric> toMetrics(String siteId, WidgetSpec spec, String userId, boolean includeValues,
 			SiteStatsReportRequest request) {
 		List<SiteStatsWidgetMetric> metrics = new ArrayList<SiteStatsWidgetMetric>();
+		Map<String, WidgetMetricValue> values = batchedMetricValues(siteId, spec, userId, includeValues, request);
 		for (WidgetMetricSpec metric : spec.getMetrics()) {
 			if (metric.isAvailable()) {
-				metrics.add(toMetric(siteId, spec, metric, userId, includeValues, request));
+				metrics.add(toMetric(siteId, spec, metric, userId, includeValues, request, values));
 			}
 		}
 		return metrics;
+	}
+
+	private Map<String, WidgetMetricValue> batchedMetricValues(String siteId, WidgetSpec spec, String userId,
+			boolean includeValues, SiteStatsReportRequest request) {
+		if (!includeValues) {
+			return Collections.emptyMap();
+		}
+		Map<String, WidgetMetricValue> communication = communicationMetricValues(siteId, spec, userId, request);
+		if (!communication.isEmpty()) {
+			return communication;
+		}
+		Map<String, WidgetMetricValue> institutional = institutionalMetricValues(spec, request);
+		if (!institutional.isEmpty()) {
+			return institutional;
+		}
+		Map<String, WidgetMetricValue> platform = platformMetricValues(spec, request);
+		if (!platform.isEmpty()) {
+			return platform;
+		}
+		return clientEnvironmentMetricValues(spec, request);
+	}
+
+	private Map<String, WidgetMetricValue> communicationMetricValues(String siteId, WidgetSpec spec, String userId,
+			SiteStatsReportRequest request) {
+		if (support.getCommunicationAnalytics() == null) {
+			return Collections.emptyMap();
+		}
+		if (!WIDGET_COMMUNICATION.equals(spec.getId()) && !WIDGET_STUDENT_COMMUNICATION.equals(spec.getId())) {
+			return Collections.emptyMap();
+		}
+		return support.getCommunicationAnalytics().metricValues(siteId, userId, request);
+	}
+
+	private Map<String, WidgetMetricValue> institutionalMetricValues(WidgetSpec spec, SiteStatsReportRequest request) {
+		if (support.getInstitutionalAnalytics() == null) {
+			return Collections.emptyMap();
+		}
+		SiteStatsReportRequest safe = SiteStatsReportRequest.normalized(request);
+		if (WIDGET_INSTITUTIONAL_PRESENCE.equals(spec.getId())) {
+			return support.getInstitutionalAnalytics().presenceMetricValues(safe);
+		}
+		if (WIDGET_INSTITUTIONAL_LEARNER_ACTIVITY.equals(spec.getId())) {
+			return support.getInstitutionalAnalytics().learnerMetricValues(safe);
+		}
+		if (WIDGET_INSTITUTIONAL_AUTHORING_ACTIVITY.equals(spec.getId())) {
+			return support.getInstitutionalAnalytics().authoringMetricValues(safe);
+		}
+		return Collections.emptyMap();
+	}
+
+	private Map<String, WidgetMetricValue> platformMetricValues(WidgetSpec spec, SiteStatsReportRequest request) {
+		if (support.getPlatformHealthAnalytics() == null || !WIDGET_PLATFORM_HEALTH.equals(spec.getId())) {
+			return Collections.emptyMap();
+		}
+		return support.getPlatformHealthAnalytics().metricValues(SiteStatsReportRequest.normalized(request));
+	}
+
+	private Map<String, WidgetMetricValue> clientEnvironmentMetricValues(WidgetSpec spec, SiteStatsReportRequest request) {
+		if (support.getClientEnvironmentAnalytics() == null || !WIDGET_CLIENT_ENVIRONMENT.equals(spec.getId())) {
+			return Collections.emptyMap();
+		}
+		return support.getClientEnvironmentAnalytics().metricValues(SiteStatsReportRequest.normalized(request));
 	}
 
 	private List<SiteStatsChart> toHighlights(String siteId, WidgetSpec spec, String userId, SiteStatsReportRequest request) {
@@ -246,24 +341,28 @@ public class SiteStatsWidgetCatalog {
 
 	private SiteStatsWidgetMetric toMetric(String siteId, WidgetSpec spec, WidgetMetricSpec metric, String userId,
 			boolean includeValues) {
-		return toMetric(siteId, spec, metric, userId, includeValues, null);
+		return toMetric(siteId, spec, metric, userId, includeValues, null, Collections.emptyMap());
 	}
 
 	private SiteStatsWidgetMetric toMetric(String siteId, WidgetSpec spec, WidgetMetricSpec metric, String userId,
-			boolean includeValues, SiteStatsReportRequest request) {
+			boolean includeValues, SiteStatsReportRequest request, Map<String, WidgetMetricValue> batchedValues) {
 		Object[] args = metric.getTextArgs() == null ? null : metric.getTextArgs().args(siteId);
 		SiteStatsWidgetMetric viewMetric = new SiteStatsWidgetMetric(metric.getId(),
 				formatMetricText(metric.getLabelKey(), args), metric.getAudience(), metric.isReportable());
 		viewMetric.setHelp(formatMetricText(metric.getHelpKey(), args));
 		viewMetric.setWidgetTitle(support.message(spec.getTitleKey()));
-		if (includeValues && metric.getValueFactory() != null) {
-			WidgetMetricValue value = metric.getValueFactory().getValue(siteId, userId,
-					SiteStatsReportRequest.normalized(request));
-			SiteStatsWidgetMetricSnapshot snapshot = new SiteStatsWidgetMetricSnapshot();
-			snapshot.setPrimary(value.getPrimary());
-			snapshot.setPercentage(value.getPercentage());
-			snapshot.setDetail(value.getDetail());
-			viewMetric.setSnapshot(snapshot);
+		if (includeValues) {
+			WidgetMetricValue value = batchedValues == null ? null : batchedValues.get(metric.getId());
+			if (value == null && metric.getValueFactory() != null) {
+				value = metric.getValueFactory().getValue(siteId, userId, SiteStatsReportRequest.normalized(request));
+			}
+			if (value != null) {
+				SiteStatsWidgetMetricSnapshot snapshot = new SiteStatsWidgetMetricSnapshot();
+				snapshot.setPrimary(value.getPrimary());
+				snapshot.setPercentage(value.getPercentage());
+				snapshot.setDetail(value.getDetail());
+				viewMetric.setSnapshot(snapshot);
+			}
 		}
 		return viewMetric;
 	}

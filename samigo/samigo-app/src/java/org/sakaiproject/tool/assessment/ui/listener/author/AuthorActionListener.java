@@ -31,9 +31,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import javax.faces.event.AbortProcessingException;
-import javax.faces.event.ActionEvent;
-import javax.faces.event.ActionListener;
+import jakarta.faces.event.AbortProcessingException;
+import jakarta.faces.event.ActionEvent;
+import jakarta.faces.event.ActionListener;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -331,6 +331,7 @@ public class AuthorActionListener
 			  log.warn("Unable to format date: " + ex.getMessage());
 			}
 	  }
+	  gradingService.setDisplayedCountsForGradingRoster(assessmentList, siteId, submissionCountHash, inProgressCountHash);
 	  list.add(activeList);
 	  list.add(inActiveList);
 	  return list;
