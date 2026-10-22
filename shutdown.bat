@@ -1,0 +1,1 @@
+cmd.exe /s /c "C:\Users\gjerg\source\repos\tomcat\apache-tomcat-10.1.60\bin\startup.bat"
