@@ -39,3 +39,6 @@ scormplayer/scorm-tool/contentPackages
 
 **/.claude/settings.local.json
 .mcp.json
+.vs
+*.jar
+*.war
